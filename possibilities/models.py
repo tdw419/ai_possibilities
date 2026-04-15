@@ -86,7 +86,7 @@ class ExplorationConfig:
     max_depth: int = 3
     branch_min: int = 3
     branch_max: int = 7
-    model: str = "ollama/qwen2.5-coder:14b"
+    model: str = "openai/glm-5.1"
     decay: float = 0.7
     dedup_threshold: float = 0.85
     max_nodes: int = 80

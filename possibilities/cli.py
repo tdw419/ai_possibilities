@@ -43,8 +43,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Max branches per node (default: 7)"
     )
     explore_p.add_argument(
-        "-m", "--model", default="ollama/qwen2.5-coder:14b",
-        help="LLM model to use (default: ollama/qwen2.5-coder:14b)"
+        "-m", "--model", default="openai/glm-5.1",
+        help="LLM model to use (default: openai/glm-5.1)"
     )
     explore_p.add_argument(
         "--decay", type=float, default=0.7,
@@ -137,8 +137,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Run cross-tree deduplication (requires LLM)"
     )
     merge_p.add_argument(
-        "-m", "--model", default="ollama/qwen2.5-coder:14b",
-        help="LLM model for dedup (default: ollama/qwen2.5-coder:14b)"
+        "-m", "--model", default="openai/glm-5.1",
+        help="LLM model for dedup (default: openai/glm-5.1)"
     )
     merge_p.add_argument(
         "--decay", type=float, default=0.7,
@@ -165,8 +165,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Project directory for context"
     )
     esc_p.add_argument(
-        "-m", "--current-model", default="ollama/qwen2.5-coder:14b",
-        help="Model used for initial exploration (default: ollama/qwen2.5-coder:14b)"
+        "-m", "--current-model", default="openai/glm-5.1",
+        help="Model used for initial exploration (default: openai/glm-5.1)"
     )
     esc_p.add_argument(
         "--max-tiers", type=int, default=2,
@@ -259,7 +259,7 @@ def cmd_resume(args: argparse.Namespace):
     # Build config, keeping existing depth unless overridden
     config = ExplorationConfig(
         seed_question=tree.description,
-        model=args.model or "ollama/qwen2.5-coder:14b",
+        model=args.model or "openai/glm-5.1",
         max_depth=args.depth or 3,
         max_nodes=args.max_nodes or 120,
         explore_strategy="bfs",

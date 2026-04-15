@@ -19,13 +19,13 @@ from .scorer import compute_fertility
 
 
 DEFAULT_TIERS = [
-    {
-        "provider": "ollama",
-        "model": "ollama/qwen2.5-coder:14b",
-        "label": "Ollama 14B (local, free)",
-        "auth": "local",
-        "backend": "litellm",
-    },
+    # {
+    #     "provider": "ollama",
+    #     "model": "ollama/qwen2.5-coder:14b",
+    #     "label": "Ollama 14B (local, free)",
+    #     "auth": "local",
+    #     "backend": "litellm",
+    # },
     {
         "provider": "zai",
         "model": "openai/glm-5.1",
@@ -198,7 +198,7 @@ def find_thin_nodes(
 
 def escalate(
     tree: PossibilityNode,
-    current_model: str = "ollama/qwen2.5-coder:14b",
+    current_model: str = "openai/glm-5.1",
     project_path: str = ".",
     max_tiers: int = 3,
     min_children: int = 2,
