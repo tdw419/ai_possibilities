@@ -9,6 +9,7 @@ from .explorer import PossibilityExplorer
 from .scorer import compute_fertility, rank_paths
 from .render import render_tree, render_ranked_paths, render_summary
 from .merge import merge_trees, load_tree
+from .escalate import escalate, DEFAULT_TIERS
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -152,6 +153,46 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Show pruned nodes in output"
     )
 
+    # escalate
+    esc_p = subparsers.add_parser(
+        "escalate", help="Re-explore thin branches with stronger models"
+    )
+    esc_p.add_argument(
+        "file", help="JSON file with saved tree to improve"
+    )
+    esc_p.add_argument(
+        "-w", "--workdir", default=".",
+        help="Project directory for context"
+    )
+    esc_p.add_argument(
+        "-m", "--current-model", default="ollama/qwen2.5-coder:14b",
+        help="Model used for initial exploration (default: ollama/qwen2.5-coder:14b)"
+    )
+    esc_p.add_argument(
+        "--max-tiers", type=int, default=2,
+        help="Number of escalation tiers to try (default: 2)"
+    )
+    esc_p.add_argument(
+        "--min-children", type=int, default=2,
+        help="Nodes with fewer children are 'thin' (default: 2)"
+    )
+    esc_p.add_argument(
+        "--decay", type=float, default=0.7,
+        help="Fertility decay factor (default: 0.7)"
+    )
+    esc_p.add_argument(
+        "-o", "--output", default=None,
+        help="Output file for escalated tree"
+    )
+    esc_p.add_argument(
+        "--show-paths", type=int, default=10,
+        help="Number of ranked paths to show"
+    )
+    esc_p.add_argument(
+        "--show-pruned", action="store_true",
+        help="Show pruned nodes"
+    )
+
     return parser.parse_args(argv)
 
 
@@ -290,6 +331,54 @@ def cmd_merge(args: argparse.Namespace):
     print(f"\nMerged tree saved to {args.output}")
 
 
+def cmd_escalate(args: argparse.Namespace):
+    with open(args.file) as f:
+        data = json.load(f)
+    tree = PossibilityNode.from_dict(data)
+
+    print(f"Provider Escalation")
+    print(f"  Tree:     {args.file}")
+    print(f"  Project:  {args.workdir}")
+    print(f"  Current:  {args.current_model}")
+    print(f"  Max tiers: {args.max_tiers}")
+    print()
+
+    # Show the escalation chain
+    current_idx = None
+    for i, tier in enumerate(DEFAULT_TIERS):
+        if tier["model"] == args.current_model:
+            current_idx = i
+            break
+
+    if current_idx is not None:
+        chain = DEFAULT_TIERS[current_idx + 1 : current_idx + 1 + args.max_tiers]
+        print(f"  Chain: {' -> '.join(t['label'] for t in chain)}")
+    print()
+
+    tree = escalate(
+        tree,
+        current_model=args.current_model,
+        project_path=args.workdir,
+        max_tiers=args.max_tiers,
+        min_children=args.min_children,
+        decay=args.decay,
+    )
+
+    # Render
+    print("=" * 60)
+    print(render_tree(tree, show_pruned=args.show_pruned))
+    print(render_summary(tree))
+
+    paths = rank_paths(tree, top_n=args.show_paths)
+    print(render_ranked_paths(paths))
+
+    # Save
+    out_path = args.output or args.file
+    with open(out_path, "w") as f:
+        json.dump(tree.to_dict(), f, indent=2)
+    print(f"\nEscalated tree saved to {out_path}")
+
+
 def main(argv=None):
     args = parse_args(argv)
 
@@ -301,6 +390,8 @@ def main(argv=None):
         cmd_resume(args)
     elif args.command == "merge":
         cmd_merge(args)
+    elif args.command == "escalate":
+        cmd_escalate(args)
     else:
         parse_args(["--help"])
 

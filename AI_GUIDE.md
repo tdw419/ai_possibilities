@@ -4,7 +4,7 @@
 
 A CLI tool that explores branching possibilities for any project using an LLM. You give it a seed question, point it at a project directory, and it builds a tree of ideas ranked by "fertility" -- how many future doors each idea opens. Ideas that spawn more sub-possibilities score higher than dead-end ideas.
 
-The tool is installed as `possibilities` and has 4 commands: `explore`, `show`, `resume`, `merge`.
+The tool is installed as `possibilities` and has 5 commands: `explore`, `show`, `resume`, `merge`, `escalate`.
 
 ## Quick Reference
 
@@ -23,8 +23,11 @@ possibilities explore "What should we build next?" -w /path/to/project -d 2 -o t
 # View a saved tree
 possibilities show tree.json --top 10
 
-# Resume (go deeper on a saved tree)
+# Resume exploration on an existing tree (go deeper)
 possibilities resume tree.json -d 4 -o tree_v2.json
+
+# Re-explore thin branches with stronger models
+possibilities escalate tree.json --max-tiers 2 -o tree_escalated.json
 
 # Run with a specific model
 possibilities explore "..." -m ollama/qwen3.5-27b:latest
@@ -37,10 +40,11 @@ No test suite. No build step beyond `pip install -e .`.
 
 ```
 ~/zion/projects/ai_possibilities/ai_possibilities/
-  possibilities/              # 1100+ lines, 12 files
-    cli.py              309   # argparse CLI, 4 subcommands
+  possibilities/              # 1300+ lines, 13 files
+    cli.py              396   # argparse CLI, 5 subcommands
     explorer.py         145   # BFS/fertility-guided tree builder
     merge.py            130   # Merge multiple trees, cross-tree dedup
+    escalate.py         207   # Provider escalation for thin branches
     models.py            96   # PossibilityNode + ExplorationConfig dataclasses
     render.py           104   # ASCII tree + ranked paths + summary
     context.py          114   # Project context gathering (README, dir tree, file types)
@@ -140,6 +144,56 @@ Merge strategy (in merge.py):
 5. Re-scores with compute_fertility().
 
 Works without an LLM when `--dedup` is not set (pure tree surgery). With `--dedup`, instantiates an LLMClient for semantic similarity checks.
+
+### escalate
+
+```bash
+possibilities escalate tree.json -w ./project --max-tiers 2 -o tree_v2.json
+```
+
+Takes an existing tree, finds "thin" branches (nodes with few children), and re-explores them with progressively stronger LLM models.
+
+Options:
+
+| Flag | Short | Default | What it does |
+|------|-------|---------|--------------|
+| (positional) | | | JSON tree file to improve |
+| `--workdir` | `-w` | `.` | Project dir for context |
+| `--current-model` | `-m` | `ollama/qwen2.5-coder:14b` | Model used for initial run |
+| `--max-tiers` | | `2` | How many escalation steps |
+| `--min-children` | | `2` | Nodes with fewer children are "thin" |
+| `--decay` | | `0.7` | Fertility decay factor |
+| `--output` | `-o` | (auto) | Output file |
+| `--show-paths` | | `10` | Ranked paths to show |
+| `--show-pruned` | | off | Show pruned nodes |
+
+Default escalation chain (in escalate.py `DEFAULT_TIERS`):
+
+| Tier | Model | Label |
+|------|-------|-------|
+| 0 | ollama/qwen2.5-coder:14b | Ollama 14B (local, fast) |
+| 1 | ollama/qwen3.5-27b:latest | Ollama 27B (local, strong) |
+| 2 | gemini/gemini-2.5-flash | Gemini Flash (API, cheap) |
+| 3 | anthropic/claude-sonnet-4-20250514 | Claude Sonnet (API, strongest) |
+
+How it works:
+1. Determines current tier from `--current-model`.
+2. Finds thin nodes: explored nodes with fewer than `--min-children` non-pruned children.
+3. For each tier above current (up to `--max-tiers`):
+   - Sends BRANCH_PROMPT to the stronger model for each thin node.
+   - Parses new branches, adds them to the node.
+   - Re-scores fertility.
+   - If fertility improvement < 0.5, stops (plateau).
+4. API keys loaded from `~/.bashrc` if not in env (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`).
+
+Typical workflow:
+```bash
+# Fast initial exploration with local model
+possibilities explore "What next?" -w . -d 2 -o tree.json
+
+# Escalate thin branches to stronger models
+possibilities escalate tree.json -w . --max-tiers 2 -o tree_v2.json
+```
 
 ## Core Concepts
 
