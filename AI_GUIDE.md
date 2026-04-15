@@ -4,7 +4,7 @@
 
 A CLI tool that explores branching possibilities for any project using an LLM. You give it a seed question, point it at a project directory, and it builds a tree of ideas ranked by "fertility" -- how many future doors each idea opens. Ideas that spawn more sub-possibilities score higher than dead-end ideas.
 
-The tool is installed as `possibilities` and has 3 commands: `explore`, `show`, `resume`.
+The tool is installed as `possibilities` and has 4 commands: `explore`, `show`, `resume`, `merge`.
 
 ## Quick Reference
 
@@ -37,9 +37,10 @@ No test suite. No build step beyond `pip install -e .`.
 
 ```
 ~/zion/projects/ai_possibilities/ai_possibilities/
-  possibilities/              # 1007 lines, 11 files
-    cli.py              232   # argparse CLI, 3 subcommands
+  possibilities/              # 1100+ lines, 12 files
+    cli.py              309   # argparse CLI, 4 subcommands
     explorer.py         145   # BFS/fertility-guided tree builder
+    merge.py            130   # Merge multiple trees, cross-tree dedup
     models.py            96   # PossibilityNode + ExplorationConfig dataclasses
     render.py           104   # ASCII tree + ranked paths + summary
     context.py          114   # Project context gathering (README, dir tree, file types)
@@ -51,6 +52,7 @@ No test suite. No build step beyond `pip install -e .`.
     __main__.py            4   # entry point for python -m possibilities
   pyproject.toml              # setuptools, litellm dependency, CLI entry point
   README.md                   # user-facing docs
+  AI_GUIDE.md                 # this file -- agent-facing docs
 ```
 
 Dependency: `litellm>=1.0` only. No other external deps. Uses `dataclasses`, `json`, `argparse`, `pathlib`, `uuid`, `os`, `re`, `time`, `collections.Counter` from stdlib.
@@ -109,6 +111,35 @@ possibilities resume tree.json [-d 4] [--max-nodes 120] [-m model] [-o output.js
 ```
 
 Loads a saved tree, finds unexplored frontier nodes, continues the BFS loop. Writes back to the same file unless `--export` is specified.
+
+### merge
+
+```bash
+possibilities merge tree_a.json tree_b.json -o combined.json [--dedup] [-m model]
+```
+
+Accepts 2+ JSON tree files. Combines them into a single unified tree.
+
+Options:
+
+| Flag | Short | Default | What it does |
+|------|-------|---------|--------------|
+| (positional) | | | Two or more tree JSON files |
+| `--output` | `-o` | (required) | Output file for merged tree |
+| `--dedup` | | off | Run cross-tree dedup (requires LLM) |
+| `--model` | `-m` | `ollama/qwen2.5-coder:14b` | LLM for dedup |
+| `--decay` | | `0.7` | Fertility decay factor |
+| `--top` | | `10` | Number of ranked paths |
+| `--show-pruned` | | off | Show pruned duplicates |
+
+Merge strategy (in merge.py):
+1. Groups input trees by root question (normalized: lowercase, stripped, trailing `?` removed).
+2. If all trees share the same question, their depth-0 children are combined directly under a new synthetic root.
+3. If trees have different questions, creates intermediate nodes per question, each containing that group's children (re-parented to depth 2).
+4. If `--dedup`: runs Deduplicator across all children of the merged tree. Catches duplicates across different input trees (e.g. "Plugin system" in tree A and "Plugin system" in tree B get deduped).
+5. Re-scores with compute_fertility().
+
+Works without an LLM when `--dedup` is not set (pure tree surgery). With `--dedup`, instantiates an LLMClient for semantic similarity checks.
 
 ## Core Concepts
 
@@ -257,3 +288,13 @@ Output is a single string, ~2-4KB, injected into BRANCH_PROMPT as `{project_cont
 ### Change the LLM prompt
 
 All prompt text lives in prompts.py. BRANCH_PROMPT is the main one. It uses Python `.format()` with these placeholders: `{project_context}`, `{seed_question}`, `{depth}`, `{depth_guidance}`, `{n_min}`, `{n_max}`.
+
+### Merge flow
+
+The merge command lives in merge.py. `load_tree(path)` deserializes JSON to PossibilityNode. `merge_trees(trees, dedup, model, dedup_threshold, decay)` does the work:
+1. Groups trees by normalized root question.
+2. Creates synthetic root, re-parents children with `_reparent_subtree()`.
+3. Optional cross-tree dedup via Deduplicator.
+4. Re-scores with compute_fertility().
+
+Called from `cmd_merge()` in cli.py.

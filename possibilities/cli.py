@@ -8,6 +8,7 @@ from .models import PossibilityNode, ExplorationConfig
 from .explorer import PossibilityExplorer
 from .scorer import compute_fertility, rank_paths
 from .render import render_tree, render_ranked_paths, render_summary
+from .merge import merge_trees, load_tree
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -118,6 +119,39 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Number of ranked paths to show"
     )
 
+    # merge
+    merge_p = subparsers.add_parser(
+        "merge", help="Merge two or more tree files into one"
+    )
+    merge_p.add_argument(
+        "files", nargs="+",
+        help="Two or more tree JSON files to merge"
+    )
+    merge_p.add_argument(
+        "-o", "--output", default=None,
+        help="Output file for merged tree (required)"
+    )
+    merge_p.add_argument(
+        "--dedup", action="store_true",
+        help="Run cross-tree deduplication (requires LLM)"
+    )
+    merge_p.add_argument(
+        "-m", "--model", default="ollama/qwen2.5-coder:14b",
+        help="LLM model for dedup (default: ollama/qwen2.5-coder:14b)"
+    )
+    merge_p.add_argument(
+        "--decay", type=float, default=0.7,
+        help="Fertility decay factor (default: 0.7)"
+    )
+    merge_p.add_argument(
+        "--top", type=int, default=10,
+        help="Number of ranked paths to show"
+    )
+    merge_p.add_argument(
+        "--show-pruned", action="store_true",
+        help="Show pruned nodes in output"
+    )
+
     return parser.parse_args(argv)
 
 
@@ -215,6 +249,47 @@ def cmd_resume(args: argparse.Namespace):
         print(f"\nTree updated in {args.file}")
 
 
+def cmd_merge(args: argparse.Namespace):
+    if len(args.files) < 2:
+        print("Error: merge requires at least 2 input files")
+        sys.exit(1)
+
+    if not args.output:
+        print("Error: -o/--output is required for merge")
+        sys.exit(1)
+
+    # Load all trees
+    trees = []
+    for path in args.files:
+        print(f"  Loading {path}")
+        trees.append(load_tree(path))
+
+    print(f"\nMerging {len(trees)} trees")
+    if args.dedup:
+        print(f"  Cross-tree dedup: ON (model: {args.model})")
+    print()
+
+    merged = merge_trees(
+        trees,
+        dedup=args.dedup,
+        model=args.model,
+        decay=args.decay,
+    )
+
+    # Render
+    print("=" * 60)
+    print(render_tree(merged, show_pruned=args.show_pruned))
+    print(render_summary(merged))
+
+    paths = rank_paths(merged, top_n=args.top)
+    print(render_ranked_paths(paths))
+
+    # Save
+    with open(args.output, "w") as f:
+        json.dump(merged.to_dict(), f, indent=2)
+    print(f"\nMerged tree saved to {args.output}")
+
+
 def main(argv=None):
     args = parse_args(argv)
 
@@ -224,6 +299,8 @@ def main(argv=None):
         cmd_show(args)
     elif args.command == "resume":
         cmd_resume(args)
+    elif args.command == "merge":
+        cmd_merge(args)
     else:
         parse_args(["--help"])
 
