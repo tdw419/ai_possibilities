@@ -169,12 +169,13 @@ Options:
 
 Default escalation chain (in escalate.py `DEFAULT_TIERS`):
 
-| Tier | Model | Label |
-|------|-------|-------|
-| 0 | ollama/qwen2.5-coder:14b | Ollama 14B (local, fast) |
-| 1 | ollama/qwen3.5-27b:latest | Ollama 27B (local, strong) |
-| 2 | gemini/gemini-2.5-flash | Gemini Flash (API, cheap) |
-| 3 | anthropic/claude-sonnet-4-20250514 | Claude Sonnet (API, strongest) |
+| Tier | Provider | Model | Auth | Backend |
+|------|----------|-------|------|---------|
+| 0 | Ollama | qwen2.5-coder:14b | local | litellm |
+| 1 | Gemini | gemini-2.5-flash | OAuth | `gemini -p` CLI |
+| 2 | Claude | claude-sonnet-4 | OAuth | `claude -p` CLI |
+
+Gemini and Claude use their CLI tools in non-interactive mode (`gemini -p "..." --sandbox` and `claude -p "..." --dangerously-skip-permissions`). These require the user to be logged in via OAuth (run `gemini` or `claude` interactively once to auth).
 
 How it works:
 1. Determines current tier from `--current-model`.

@@ -1,23 +1,46 @@
-"""Provider escalation -- re-explore thin branches with progressively stronger models."""
+"""Provider escalation -- re-explore thin branches with progressively stronger models.
+
+Tier 0: Ollama     (local, free, litellm)
+Tier 1: Gemini     (OAuth, shells out to `gemini -p`)
+Tier 2: Claude     (OAuth, shells out to `claude -p`)
+"""
 
 import json
 import os
+import subprocess
 import sys
 from typing import Optional
 
 from .models import PossibilityNode, ExplorationConfig
 from .explorer import PossibilityExplorer
-from .llm import LLMClient
+from .llm import LLMClient, parse_json_response
 from .scorer import compute_fertility
-from .render import render_tree
 
 
-# Default escalation tiers (weakest to strongest)
 DEFAULT_TIERS = [
-    {"provider": "ollama", "model": "ollama/qwen2.5-coder:14b", "label": "Ollama 14B (local, fast)"},
-    {"provider": "ollama", "model": "ollama/qwen3.5-27b:latest", "label": "Ollama 27B (local, strong)"},
-    {"provider": "gemini", "model": "gemini/gemini-2.5-flash", "label": "Gemini Flash (API, cheap)"},
-    {"provider": "anthropic", "model": "anthropic/claude-sonnet-4-20250514", "label": "Claude Sonnet (API, strongest)"},
+    {
+        "provider": "ollama",
+        "model": "ollama/qwen2.5-coder:14b",
+        "label": "Ollama 14B (local, free)",
+        "auth": "local",
+        "backend": "litellm",
+    },
+    {
+        "provider": "gemini",
+        "model": "gemini-2.5-flash",
+        "label": "Gemini (OAuth)",
+        "auth": "oauth",
+        "backend": "cli",
+        "cli_cmd": "gemini",
+    },
+    {
+        "provider": "claude",
+        "model": "claude-sonnet-4-20250514",
+        "label": "Claude (OAuth)",
+        "auth": "oauth",
+        "backend": "cli",
+        "cli_cmd": "claude",
+    },
 ]
 
 
@@ -35,15 +58,102 @@ def _ensure_api_keys():
             with open(bashrc) as f:
                 for line in f:
                     line = line.strip()
-                    for var in need:
+                    for var in list(need):
                         if line.startswith(f"export {var}="):
-                            # extract value between quotes
                             val = line.split("=", 1)[1].strip().strip('"').strip("'")
                             os.environ[var] = val
                             need.remove(var)
                             break
 
     os.environ["_POSSIBILITIES_KEYS_LOADED"] = "1"
+
+
+def _check_available(tier: dict) -> bool:
+    """Check if a tier's provider is actually available."""
+    if tier["backend"] == "litellm" and tier["auth"] == "local":
+        # Ollama -- just check if it's running
+        try:
+            subprocess.run(
+                ["curl", "-s", "http://localhost:11434/api/tags"],
+                capture_output=True, timeout=5,
+            )
+            return True
+        except Exception:
+            return False
+
+    elif tier["backend"] == "litellm" and tier["auth"] == "api_key":
+        _ensure_api_keys()
+        return bool(os.environ.get(tier.get("env_key", "")))
+
+    elif tier["backend"] == "cli" and tier["auth"] == "oauth":
+        cli = tier.get("cli_cmd", "")
+        try:
+            result = subprocess.run(
+                ["which", cli], capture_output=True, timeout=5,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    return False
+
+
+def _generate_with_cli(tier: dict, prompt: str) -> list[dict]:
+    """Generate via CLI tool (gemini or claude) using non-interactive mode."""
+    cli_cmd = tier["cli_cmd"]
+
+    if cli_cmd == "gemini":
+        result = subprocess.run(
+            ["gemini", "-p", prompt, "--sandbox"],
+            capture_output=True, text=True, timeout=120,
+        )
+        output = result.stdout
+    elif cli_cmd == "claude":
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--dangerously-skip-permissions"],
+            capture_output=True, text=True, timeout=120,
+        )
+        output = result.stdout
+    else:
+        return []
+
+    return parse_json_response(output)
+
+
+def _generate_with_litellm(tier: dict, prompt: str) -> list[dict]:
+    """Generate via litellm (ollama or zai)."""
+    kwargs = dict(
+        model=tier["model"],
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.9,
+        max_tokens=3000,
+    )
+
+    if tier["provider"] == "ollama":
+        kwargs["api_base"] = "http://localhost:11434"
+    elif tier["provider"] == "zai":
+        _ensure_api_keys()
+        api_key = os.environ.get(tier.get("env_key", ""))
+        base_url = os.environ.get(
+            tier.get("env_base", ""), tier.get("base_url", "")
+        )
+        if api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["api_base"] = base_url
+
+    import litellm
+    resp = litellm.completion(**kwargs)
+    raw = resp.choices[0].message.content
+    return parse_json_response(raw)
+
+
+def generate_for_tier(tier: dict, prompt: str) -> list[dict]:
+    """Generate branches using whichever backend the tier specifies."""
+    if tier["backend"] == "cli":
+        return _generate_with_cli(tier, prompt)
+    else:
+        return _generate_with_litellm(tier, prompt)
 
 
 def _get_tier_for_model(model: str) -> Optional[int]:
@@ -57,14 +167,11 @@ def _get_tier_for_model(model: str) -> Optional[int]:
 def find_thin_nodes(
     tree: PossibilityNode,
     min_children: int = 2,
-    min_fertility: float = 1.0,
 ) -> list[PossibilityNode]:
     """Find nodes that could benefit from re-exploration.
 
-    A node is "thin" if:
-    - It's a leaf (0 children) and not at max depth, OR
-    - It has fewer than min_children, OR
-    - Its fertility is below min_fertility and it's not a leaf
+    A node is "thin" if it's been explored but has fewer than
+    min_children non-pruned children.
     """
     thin = []
 
@@ -86,7 +193,7 @@ def escalate(
     tree: PossibilityNode,
     current_model: str = "ollama/qwen2.5-coder:14b",
     project_path: str = ".",
-    max_tiers: int = 2,
+    max_tiers: int = 3,
     min_children: int = 2,
     decay: float = 0.7,
 ) -> PossibilityNode:
@@ -96,7 +203,7 @@ def escalate(
         tree: Existing tree to improve.
         current_model: Model that was used for the initial exploration.
         project_path: Project directory for context.
-        max_tiers: How many tiers to escalate (default 2 = try 2 stronger models).
+        max_tiers: How many tiers to escalate (default 3 = try all stronger models).
         min_children: Nodes with fewer non-pruned children are "thin".
         decay: Fertility decay factor.
 
@@ -108,13 +215,19 @@ def escalate(
     # Find starting tier
     start_idx = _get_tier_for_model(current_model)
     if start_idx is None:
-        start_idx = 0  # unknown model, start from tier 0
+        start_idx = 0
 
-    # Build escalation chain from current tier upward
-    tiers_to_try = DEFAULT_TIERS[start_idx + 1 : start_idx + 1 + max_tiers]
+    # Build escalation chain, skipping unavailable tiers
+    candidate_tiers = DEFAULT_TIERS[start_idx + 1 : start_idx + 1 + max_tiers]
+    tiers_to_try = []
+    for t in candidate_tiers:
+        if _check_available(t):
+            tiers_to_try.append(t)
+        else:
+            print(f"  Skipping {t['label']}: not available ({t['auth']})")
 
     if not tiers_to_try:
-        print("  Already at strongest tier, no escalation possible.")
+        print("  No stronger tiers available. Install or auth a provider.")
         return tree
 
     # Initial score
@@ -135,37 +248,27 @@ def escalate(
         print(f"  Tier {tier_idx + 1}: {tier['label']}")
         print(f"    Found {len(thin)} thin nodes, re-exploring...")
 
-        # Re-explore each thin node with stronger model
+        # Get project context (same for all nodes in this tier)
+        from .context import gather_project_context
+        project_context = gather_project_context(project_path)
+
+        # Re-explore each thin node
         improved = 0
         for node in thin:
-            node.explored = False  # allow re-exploration
-            node.children = []     # clear old children
+            node.explored = False
+            node.children = []
 
-            config = ExplorationConfig(
-                seed_question=node.description or node.title,
-                project_path=project_path,
-                model=tier["model"],
-                max_depth=1,         # only expand this one node
-                branch_min=3,
-                branch_max=7,
-                max_nodes=len(thin) * 7,  # enough headroom
-                temperature=0.9,
-            )
-
-            explorer = PossibilityExplorer(config)
-            explorer.root = node
-            # Just generate branches for this node, not recursive
             try:
                 from .prompts import BRANCH_PROMPT, get_depth_guidance
                 prompt = BRANCH_PROMPT.format(
-                    project_context=explorer.project_context,
+                    project_context=project_context,
                     seed_question=node.description or node.title,
                     depth=node.depth,
                     depth_guidance=get_depth_guidance(node.depth),
-                    n_min=config.branch_min,
-                    n_max=config.branch_max,
+                    n_min=3,
+                    n_max=7,
                 )
-                branches_raw = explorer.llm.generate_json(prompt)
+                branches_raw = generate_for_tier(tier, prompt)
                 if branches_raw:
                     for bd in branches_raw:
                         child = PossibilityNode(
@@ -176,13 +279,13 @@ def escalate(
                             category=bd.get("category", ""),
                             depth=node.depth + 1,
                             parent_id=node.id,
-                            model_used=tier["model"],
+                            model_used=f"{tier['provider']}/{tier['model']}",
                         )
                         node.children.append(child)
                     improved += 1
                     print(f"      + {node.title}: {len(node.children)} new branches")
                 else:
-                    print(f"      [-] {node.title}: model returned no valid branches")
+                    print(f"      [-] {node.title}: no valid branches returned")
             except Exception as e:
                 print(f"      [!] {node.title}: {e}")
 
