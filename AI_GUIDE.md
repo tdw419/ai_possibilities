@@ -172,8 +172,11 @@ Default escalation chain (in escalate.py `DEFAULT_TIERS`):
 | Tier | Provider | Model | Auth | Backend |
 |------|----------|-------|------|---------|
 | 0 | Ollama | qwen2.5-coder:14b | local | litellm |
-| 1 | Gemini | gemini-2.5-flash | OAuth | `gemini -p` CLI |
-| 2 | Claude | claude-sonnet-4 | OAuth | `claude -p` CLI |
+| 1 | ZAI | glm-5.1 | API key | litellm (z.ai endpoint) |
+| 2 | Gemini | gemini-2.5-flash | OAuth | `gemini -p` CLI |
+| 3 | Claude | claude-sonnet-4 | OAuth | `claude -p` CLI |
+
+ZAI uses the OpenAI-compatible endpoint at `https://api.z.ai/api/coding/paas/v4` with `ZAI_API_KEY` from env (loaded from `~/.bashrc`). Available models: glm-4.5, glm-4.6, glm-4.7, glm-5, glm-5-turbo, glm-5.1.
 
 Gemini and Claude use their CLI tools in non-interactive mode (`gemini -p "..." --sandbox` and `claude -p "..." --dangerously-skip-permissions`). These require the user to be logged in via OAuth (run `gemini` or `claude` interactively once to auth).
 

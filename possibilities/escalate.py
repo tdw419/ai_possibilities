@@ -1,8 +1,9 @@
 """Provider escalation -- re-explore thin branches with progressively stronger models.
 
-Tier 0: Ollama     (local, free, litellm)
-Tier 1: Gemini     (OAuth, shells out to `gemini -p`)
-Tier 2: Claude     (OAuth, shells out to `claude -p`)
+Tier 0: Ollama     (local, litellm)
+Tier 1: ZAI        (API key, litellm with z.ai endpoint, glm-5.1)
+Tier 2: Gemini     (OAuth, shells out to `gemini -p`)
+Tier 3: Claude     (OAuth, shells out to `claude -p`)
 """
 
 import json
@@ -24,6 +25,15 @@ DEFAULT_TIERS = [
         "label": "Ollama 14B (local, free)",
         "auth": "local",
         "backend": "litellm",
+    },
+    {
+        "provider": "zai",
+        "model": "openai/glm-5.1",
+        "label": "ZAI glm-5.1 (API)",
+        "auth": "api_key",
+        "backend": "litellm",
+        "env_key": "ZAI_API_KEY",
+        "api_base": "https://api.z.ai/api/coding/paas/v4",
     },
     {
         "provider": "gemini",
@@ -131,16 +141,13 @@ def _generate_with_litellm(tier: dict, prompt: str) -> list[dict]:
 
     if tier["provider"] == "ollama":
         kwargs["api_base"] = "http://localhost:11434"
-    elif tier["provider"] == "zai":
+    elif tier["auth"] == "api_key":
         _ensure_api_keys()
         api_key = os.environ.get(tier.get("env_key", ""))
-        base_url = os.environ.get(
-            tier.get("env_base", ""), tier.get("base_url", "")
-        )
         if api_key:
             kwargs["api_key"] = api_key
-        if base_url:
-            kwargs["api_base"] = base_url
+        if tier.get("api_base"):
+            kwargs["api_base"] = tier["api_base"]
 
     import litellm
     resp = litellm.completion(**kwargs)
